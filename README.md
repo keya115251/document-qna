@@ -1,21 +1,38 @@
 # Document Q&A (RAG)
 
-A local RAG-based document Q&A system built with LangChain and Ollama. Ask questions about your documents — runs fully offline, no API costs.
+A local RAG-based Document Q&A system. Upload any document or paste a URL — ask questions in plain English and get accurate, cited answers. Runs fully offline with no API costs.
+
+## Features
+
+- **Hybrid search** — combines BM25 keyword search and vector search for better retrieval
+- **Multi-document support** — load and query across an entire folder of documents at once
+- **URL support** — paste any webpage URL and ask questions about it instantly
+- **OCR** — extracts text from image-based and scanned PDFs automatically
+- **Conversation memory** — ask follow-up questions naturally, the system remembers context
+- **Citations** — every answer shows exactly which file and page it came from
+- **Query rewriting** — vague questions are automatically rewritten for better retrieval
+- **Persistent storage** — vector DB saves to disk, reloads instantly on future runs
 
 ## Stack
+
 - **LangChain** — pipeline orchestration
-- **Ollama** — local LLM (llama3.2) and embeddings (nomic-embed-text)
+- **Ollama** — local LLM (llama3.2) and embeddings (nomic-embed-text), runs offline
 - **Chroma** — local vector database
+- **Tesseract** — OCR engine for image-based PDFs
+- **BeautifulSoup** — web scraping for URL support
 
 ## Setup
 
 1. Install [Ollama](https://ollama.com) and pull the models:
 ```bash
 ollama pull llama3.2
+ollama pull llama3.2:1b
 ollama pull nomic-embed-text
 ```
 
-2. Clone the repo and create a virtual environment:
+2. Install [Tesseract](https://github.com/UB-Mannheim/tesseract/wiki) and [Poppler](https://github.com/oschwartz10612/poppler-windows/releases) (Windows)
+
+3. Clone the repo and create a virtual environment:
 ```bash
 git clone https://github.com/keya115251/document-qna.git
 cd document-qna
@@ -24,22 +41,41 @@ venv\Scripts\activate  # Windows
 source venv/bin/activate  # Mac/Linux
 ```
 
-3. Install dependencies:
+4. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-4. Run:
+5. Update the paths in `trial.py` to match your Tesseract and Poppler install locations:
+```python
+TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+POPPLER_PATH   = r"C:\poppler\poppler-26.02.0\Library\bin"
+```
+
+6. Run:
 ```bash
 python trial.py
 ```
 
 ## Usage
-Place your document in the project folder, update the filename in `trial.py`, and run. Supports `.txt`, `.pdf`, and `.docx` files.
+
+At startup, choose to load a single file, folder, or URL. During a session:
+
+- Ask any question about your loaded documents
+- Type `load url <url>` to add a webpage to the knowledge base mid-session
+- Type `clear` to reset conversation memory
+- Type `quit` to exit
 
 ## Roadmap
 
-- [ ] **Hybrid search** — combine BM25 keyword search with vector search for better retrieval accuracy
-- [ ] **Multi-document support** — load and query across an entire folder of documents at once
-- [ ] **Citations** — show exactly which part of the source document each answer came from
-- [ ] **Web UI** — browser-based interface using Streamlit or Gradio so anyone can use it without the terminal
+- [x] Hybrid search (BM25 + vector)
+- [x] Multi-document support
+- [x] OCR for image-based PDFs
+- [x] Query rewriting
+- [x] Citations with source and page attribution
+- [x] Conversation memory
+- [x] URL support with mid-session loading
+- [ ] Auto document summary on load
+- [ ] Chat history export
+- [ ] Web UI (Streamlit)
+- [ ] Evaluation dashboard
