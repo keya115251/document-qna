@@ -3,6 +3,8 @@ import re
 from pathlib import Path
 from typing import List
 
+import requests
+from bs4 import BeautifulSoup
 import pytesseract
 from pdf2image import convert_from_path
 import fitz  # pymupdf
@@ -43,7 +45,34 @@ class HybridRetriever(BaseRetriever):
         return combined[:6]
 
 
-# ── 2. PDF loader with OCR fallback ──────────────────────────────────────────
+# ── 2. URL loader ─────────────────────────────────────────────────────────────
+
+def load_url(url: str) -> List[Document]:
+    print(f"  Fetching: {url}")
+    headers = {"User-Agent": "Mozilla/5.0"}
+    response = requests.get(url, headers=headers, timeout=10)
+    response.raise_for_status()
+
+    soup = BeautifulSoup(response.text, "html.parser")
+
+    # Remove navigation, scripts, styles
+    for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+        tag.decompose()
+
+    # Get main text
+    text = soup.get_text(separator="\n")
+    text = re.sub(r'\n{3,}', '\n\n', text).strip()
+
+    if not text:
+        raise ValueError("No text could be extracted from the URL.")
+
+    return [Document(
+        page_content=text,
+        metadata={"source": url, "page": 1}
+    )]
+
+
+# ── 3. PDF loader with OCR fallback ──────────────────────────────────────────
 
 def load_pdf(path: str) -> List[Document]:
     docs = []
@@ -69,7 +98,7 @@ def load_pdf(path: str) -> List[Document]:
     return docs
 
 
-# ── 3. Clean extracted text ───────────────────────────────────────────────────
+# ── 4. Clean extracted text ───────────────────────────────────────────────────
 
 def clean_docs(docs: List[Document]) -> List[Document]:
     for doc in docs:
@@ -80,7 +109,7 @@ def clean_docs(docs: List[Document]) -> List[Document]:
     return [doc for doc in docs if len(doc.page_content) > 50]
 
 
-# ── 4. Load any file type ─────────────────────────────────────────────────────
+# ── 5. Load any file type ─────────────────────────────────────────────────────
 
 def load_document(path: str) -> List[Document]:
     ext = Path(path).suffix.lower()
@@ -104,7 +133,21 @@ def load_folder(folder: str) -> List[Document]:
     return all_docs
 
 
-# ── 5. Ask the user what to load ──────────────────────────────────────────────
+# ── 6. Build vector store from docs ──────────────────────────────────────────
+
+def build_vectorstore(docs: List[Document], embeddings) -> tuple:
+    docs   = clean_docs(docs)
+    print(f"Loaded {len(docs)} page(s) after cleaning")
+    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+    chunks   = splitter.split_documents(docs)
+    print(f"Split into {len(chunks)} chunks")
+    print("Embedding and saving to disk...")
+    vs = Chroma.from_documents(chunks, embeddings, persist_directory=CHROMA_DIR)
+    print("Saved!")
+    return vs, chunks
+
+
+# ── 7. Initial load ───────────────────────────────────────────────────────────
 
 print("\n=== Document Q&A (RAG) ===\n")
 embeddings = OllamaEmbeddings(model="nomic-embed-text")
@@ -117,17 +160,19 @@ if os.path.exists(CHROMA_DIR):
 else:
     db_choice = "2"
 
+all_chunks = []
+
 if db_choice == "1":
     print("Loading existing database...")
     vectorstore    = Chroma(persist_directory=CHROMA_DIR, embedding_function=embeddings)
-    chunks         = None
     bm25_available = False
 else:
     bm25_available = True
-    print("\nLoad a single file or an entire folder?")
+    print("\nWhat would you like to load?")
     print("  1. Single file")
     print("  2. Entire folder")
-    choice = input("\nEnter 1 or 2: ").strip()
+    print("  3. URL")
+    choice = input("\nEnter 1, 2, or 3: ").strip()
 
     if choice == "1":
         path = input("Enter file path: ").strip()
@@ -135,26 +180,22 @@ else:
     elif choice == "2":
         folder = input("Enter folder path: ").strip()
         docs   = load_folder(folder)
+    elif choice == "3":
+        url  = input("Enter URL: ").strip()
+        docs = load_url(url)
     else:
         print("Defaulting to acme_policy.txt")
         docs = load_document("acme_policy.txt")
 
-    docs   = clean_docs(docs)
-    print(f"\nLoaded {len(docs)} page(s) after cleaning")
-    splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
-    chunks   = splitter.split_documents(docs)
-    print(f"Split into {len(chunks)} chunks")
-    print("Embedding and saving to disk...")
-    vectorstore = Chroma.from_documents(chunks, embeddings, persist_directory=CHROMA_DIR)
-    print("Saved! Future runs will load instantly.")
+    vectorstore, all_chunks = build_vectorstore(docs, embeddings)
 
 
-# ── 6. Build retrievers ───────────────────────────────────────────────────────
+# ── 8. Build retrievers ───────────────────────────────────────────────────────
 
 vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
-if bm25_available and chunks:
-    bm25_retriever   = BM25Retriever.from_documents(chunks)
+if bm25_available and all_chunks:
+    bm25_retriever   = BM25Retriever.from_documents(all_chunks)
     bm25_retriever.k = 4
     retriever        = HybridRetriever(bm25=bm25_retriever, vector=vector_retriever)
     print("Using hybrid search (BM25 + vector).")
@@ -163,9 +204,9 @@ else:
     print("Using vector search.")
 
 
-# ── 7. Prompts + LLM ─────────────────────────────────────────────────────────
+# ── 9. Prompts + LLM ─────────────────────────────────────────────────────────
 
-llm = OllamaLLM(model="llama3.2")
+llm      = OllamaLLM(model="llama3.2")
 fast_llm = OllamaLLM(model="llama3.2:1b")
 
 answer_prompt = PromptTemplate.from_template("""
@@ -190,16 +231,16 @@ Question: {question}
 History summary: {history}""")
 
 rewrite_chain = rewrite_prompt | fast_llm | StrOutputParser()
-answer_chain  = answer_prompt  | llm | StrOutputParser()
+answer_chain  = answer_prompt  | llm      | StrOutputParser()
 
 
-# ── 8. Format helpers ─────────────────────────────────────────────────────────
+# ── 10. Format helpers ────────────────────────────────────────────────────────
 
 def format_history(history: list) -> str:
     if not history:
         return "No previous conversation."
     lines = []
-    for turn in history[-4:]:  # last 4 exchanges to keep context window manageable
+    for turn in history[-4:]:
         lines.append(f"User: {turn['question']}")
         lines.append(f"Assistant: {turn['answer']}")
     return "\n".join(lines)
@@ -207,26 +248,22 @@ def format_history(history: list) -> str:
 def format_docs_with_citations(docs: List[Document]) -> tuple[str, list]:
     context_parts, citations = [], []
     for doc in docs:
-        source   = Path(doc.metadata.get("source", "unknown")).name
+        source   = doc.metadata.get("source", "unknown")
+        # Show just filename for files, full URL for web pages
+        label_source = source if source.startswith("http") else Path(source).name
         page     = doc.metadata.get("page", "?")
-        label    = f"[SOURCE: {source}, PAGE: {page}]"
+        label    = f"[SOURCE: {label_source}, PAGE: {page}]"
         context_parts.append(f"{label}\n{doc.page_content}")
-        citation = f"{source} — p.{page}"
+        citation = f"{label_source} — p.{page}"
         if citation not in citations:
             citations.append(citation)
     return "\n\n".join(context_parts), citations
 
 def get_docs(question: str, history: list) -> List[Document]:
-    # Summarize history to just last exchange for rewriting
-    last = f"Previous topic: {history[-1]['question']}" if history else "None"
-    
-    rewritten = rewrite_chain.invoke({
-        "question": question,
-        "history": last
-    })
-    query = rewritten.strip().split("\n")[0]  # take just first line
-    queries = [question, query] if query != question else [question]
-    
+    last      = f"Previous topic: {history[-1]['question']}" if history else "None"
+    rewritten = rewrite_chain.invoke({"question": question, "history": last})
+    query     = rewritten.strip().split("\n")[0]
+    queries   = [question, query] if query != question else [question]
     seen, all_docs = set(), []
     for q in queries:
         for doc in retriever.invoke(q):
@@ -236,25 +273,46 @@ def get_docs(question: str, history: list) -> List[Document]:
     return all_docs[:8]
 
 
-# ── 9. Q&A loop with memory ───────────────────────────────────────────────────
+# ── 11. Q&A loop ──────────────────────────────────────────────────────────────
 
 print("\nReady! Ask anything about your documents.")
-print("Type 'quit' to exit, 'clear' to reset conversation history.\n")
+print("Commands: 'quit' to exit, 'clear' to reset memory,")
+print("          'load url <url>' to add a webpage mid-session\n")
 
 history = []
 
 while True:
-    question = input("You: ")
+    question = input("You: ").strip()
 
-    if question.strip().lower() == "quit":
+    if not question:
+        continue
+    if question.lower() == "quit":
         break
-    if question.strip().lower() == "clear":
+    if question.lower() == "clear":
         history = []
         print("Conversation history cleared.\n")
         continue
-    if not question.strip():
+
+    # ── Load a URL mid-session ────────────────────────────────────────────────
+    if question.lower().startswith("load url "):
+        url = question[9:].strip()
+        try:
+            new_docs   = load_url(url)
+            new_docs   = clean_docs(new_docs)
+            splitter   = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
+            new_chunks = splitter.split_documents(new_docs)
+            vectorstore.add_documents(new_chunks)
+            all_chunks.extend(new_chunks)
+            # Rebuild BM25 with new chunks
+            bm25_retriever      = BM25Retriever.from_documents(all_chunks)
+            bm25_retriever.k    = 4
+            retriever.__dict__['bm25'] = bm25_retriever
+            print(f"Added {len(new_chunks)} chunks from {url}\n")
+        except Exception as e:
+            print(f"Failed to load URL: {e}\n")
         continue
 
+    # ── Normal Q&A ────────────────────────────────────────────────────────────
     docs               = get_docs(question, history)
     context, citations = format_docs_with_citations(docs)
     answer             = answer_chain.invoke({
@@ -269,5 +327,4 @@ while True:
         print(f"  • {c}")
     print()
 
-    # Save to memory
     history.append({"question": question, "answer": answer})
