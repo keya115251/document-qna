@@ -49,27 +49,17 @@ class HybridRetriever(BaseRetriever):
 
 def load_url(url: str) -> List[Document]:
     print(f"  Fetching: {url}")
-    headers = {"User-Agent": "Mozilla/5.0"}
+    headers  = {"User-Agent": "Mozilla/5.0"}
     response = requests.get(url, headers=headers, timeout=10)
     response.raise_for_status()
-
     soup = BeautifulSoup(response.text, "html.parser")
-
-    # Remove navigation, scripts, styles
     for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
         tag.decompose()
-
-    # Get main text
     text = soup.get_text(separator="\n")
     text = re.sub(r'\n{3,}', '\n\n', text).strip()
-
     if not text:
         raise ValueError("No text could be extracted from the URL.")
-
-    return [Document(
-        page_content=text,
-        metadata={"source": url, "page": 1}
-    )]
+    return [Document(page_content=text, metadata={"source": url, "page": 1})]
 
 
 # ── 3. PDF loader with OCR fallback ──────────────────────────────────────────
@@ -136,7 +126,7 @@ def load_folder(folder: str) -> List[Document]:
 # ── 6. Build vector store from docs ──────────────────────────────────────────
 
 def build_vectorstore(docs: List[Document], embeddings) -> tuple:
-    docs   = clean_docs(docs)
+    docs     = clean_docs(docs)
     print(f"Loaded {len(docs)} page(s) after cleaning")
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
     chunks   = splitter.split_documents(docs)
@@ -230,11 +220,31 @@ rewrite_prompt = PromptTemplate.from_template("""Rewrite this question as a bett
 Question: {question}
 History summary: {history}""")
 
+summary_prompt = PromptTemplate.from_template("""
+Summarize the following document content in 4-5 sentences.
+Cover the main topics, key points, and what a reader would learn from it.
+
+Content:
+{content}
+
+Summary:""")
+
 rewrite_chain = rewrite_prompt | fast_llm | StrOutputParser()
 answer_chain  = answer_prompt  | llm      | StrOutputParser()
+summary_chain = summary_prompt | llm      | StrOutputParser()
 
 
-# ── 10. Format helpers ────────────────────────────────────────────────────────
+# ── 10. Auto summary ──────────────────────────────────────────────────────────
+
+def summarize_docs(docs: List[Document]) -> None:
+    sample  = "\n\n".join(doc.page_content for doc in docs[:3])[:3000]
+    print("\nGenerating document summary...")
+    summary = summary_chain.invoke({"content": sample})
+    print(f"\n📄 Summary:\n{summary}")
+    print("-" * 60)
+
+
+# ── 11. Format helpers ────────────────────────────────────────────────────────
 
 def format_history(history: list) -> str:
     if not history:
@@ -248,11 +258,10 @@ def format_history(history: list) -> str:
 def format_docs_with_citations(docs: List[Document]) -> tuple[str, list]:
     context_parts, citations = [], []
     for doc in docs:
-        source   = doc.metadata.get("source", "unknown")
-        # Show just filename for files, full URL for web pages
+        source       = doc.metadata.get("source", "unknown")
         label_source = source if source.startswith("http") else Path(source).name
-        page     = doc.metadata.get("page", "?")
-        label    = f"[SOURCE: {label_source}, PAGE: {page}]"
+        page         = doc.metadata.get("page", "?")
+        label        = f"[SOURCE: {label_source}, PAGE: {page}]"
         context_parts.append(f"{label}\n{doc.page_content}")
         citation = f"{label_source} — p.{page}"
         if citation not in citations:
@@ -273,7 +282,13 @@ def get_docs(question: str, history: list) -> List[Document]:
     return all_docs[:8]
 
 
-# ── 11. Q&A loop ──────────────────────────────────────────────────────────────
+# ── 12. Run auto summary after loading ───────────────────────────────────────
+
+if db_choice != "1":
+    summarize_docs(docs)
+
+
+# ── 13. Q&A loop ──────────────────────────────────────────────────────────────
 
 print("\nReady! Ask anything about your documents.")
 print("Commands: 'quit' to exit, 'clear' to reset memory,")
@@ -303,11 +318,11 @@ while True:
             new_chunks = splitter.split_documents(new_docs)
             vectorstore.add_documents(new_chunks)
             all_chunks.extend(new_chunks)
-            # Rebuild BM25 with new chunks
-            bm25_retriever      = BM25Retriever.from_documents(all_chunks)
-            bm25_retriever.k    = 4
+            bm25_retriever         = BM25Retriever.from_documents(all_chunks)
+            bm25_retriever.k       = 4
             retriever.__dict__['bm25'] = bm25_retriever
-            print(f"Added {len(new_chunks)} chunks from {url}\n")
+            print(f"Added {len(new_chunks)} chunks from {url}")
+            summarize_docs(new_docs)
         except Exception as e:
             print(f"Failed to load URL: {e}\n")
         continue
