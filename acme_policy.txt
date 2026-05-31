@@ -1,0 +1,42 @@
+ACME Corp Employee Policy Handbook
+====================================
+
+LEAVE POLICY
+------------
+Full-time employees are entitled to 20 days of paid annual leave per year.
+Leave must be approved by your direct manager at least 2 weeks in advance.
+Unused leave of up to 5 days can be carried over to the next calendar year.
+Sick leave is separate from annual leave and capped at 10 days per year.
+Employees on probation (first 3 months) are not eligible for paid leave.
+
+REMOTE WORK POLICY
+------------------
+Employees may work remotely up to 3 days per week.
+Remote work must be approved by your team lead on a monthly basis.
+Employees are expected to be online and reachable between 10am and 4pm in their local timezone.
+All remote work must be done from a secure, private network. Public Wi-Fi is not permitted.
+Equipment such as laptops and monitors can be requested from the IT department for home use.
+
+EXPENSE REIMBURSEMENT
+---------------------
+Business expenses up to $100 can be reimbursed without prior approval.
+Expenses above $100 require manager sign-off before the purchase is made.
+All reimbursement claims must be submitted within 30 days of the expense.
+Receipts are mandatory for all claims above $20.
+Travel expenses for client meetings are fully covered if booked through the company travel portal.
+
+PERFORMANCE REVIEWS
+-------------------
+Performance reviews are conducted twice a year, in June and December.
+Employees set goals at the start of each review cycle in collaboration with their manager.
+Ratings are on a scale of 1 to 5, where 3 is "meets expectations".
+Employees rated 4 or above for two consecutive cycles are eligible for a promotion review.
+Underperformance (rating of 1 or 2) triggers a 60-day improvement plan.
+
+IT AND SECURITY
+---------------
+All employees must complete a cybersecurity training course within their first month.
+Passwords must be at least 12 characters and changed every 90 days.
+Sharing login credentials with colleagues is strictly prohibited.
+Any suspected security breach must be reported to it-security@acme.com within 1 hour of discovery.
+Personal devices used for work must have company-approved antivirus software installed.
