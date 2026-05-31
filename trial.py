@@ -4,7 +4,6 @@ from pathlib import Path
 from typing import List
 
 import pytesseract
-from PIL import Image
 from pdf2image import convert_from_path
 import fitz  # pymupdf
 
@@ -22,7 +21,7 @@ from pydantic import Field
 
 # ── CONFIG — update these paths if yours differ ───────────────────────────────
 TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-POPPLER_PATH = r"C:\poppler\poppler-26.02.0\Library\bin"
+POPPLER_PATH   = r"C:\poppler\poppler-26.02.0\Library\bin"
 CHROMA_DIR     = "./chroma_db"
 
 pytesseract.pytesseract.tesseract_cmd = TESSERACT_PATH
@@ -50,11 +49,8 @@ class HybridRetriever(BaseRetriever):
 def load_pdf(path: str) -> List[Document]:
     docs = []
     pdf  = fitz.open(path)
-
     for page_num, page in enumerate(pdf):
         text = page.get_text().strip()
-
-        # If the page has very little text, OCR it
         if len(text) < 50:
             print(f"    Page {page_num + 1}: no text found, running OCR...")
             images = convert_from_path(
@@ -65,13 +61,11 @@ def load_pdf(path: str) -> List[Document]:
             )
             if images:
                 text = pytesseract.image_to_string(images[0])
-
         if text.strip():
             docs.append(Document(
                 page_content=text,
                 metadata={"source": path, "page": page_num + 1}
             ))
-
     pdf.close()
     return docs
 
@@ -98,7 +92,7 @@ def load_document(path: str) -> List[Document]:
     elif ext == ".txt":
         return TextLoader(path).load()
     else:
-        raise ValueError(f"Unsupported file type: {ext}  (supported: .txt, .pdf, .docx)")
+        raise ValueError(f"Unsupported file type: {ext}")
 
 
 def load_folder(folder: str) -> List[Document]:
@@ -148,15 +142,11 @@ else:
 
     docs   = clean_docs(docs)
     print(f"\nLoaded {len(docs)} page(s) after cleaning")
-
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
     chunks   = splitter.split_documents(docs)
     print(f"Split into {len(chunks)} chunks")
-
     print("Embedding and saving to disk...")
-    vectorstore = Chroma.from_documents(
-        chunks, embeddings, persist_directory=CHROMA_DIR
-    )
+    vectorstore = Chroma.from_documents(chunks, embeddings, persist_directory=CHROMA_DIR)
     print("Saved! Future runs will load instantly.")
 
 
@@ -165,42 +155,62 @@ else:
 vector_retriever = vectorstore.as_retriever(search_kwargs={"k": 4})
 
 if bm25_available and chunks:
-    bm25_retriever      = BM25Retriever.from_documents(chunks)
-    bm25_retriever.k    = 4
-    retriever           = HybridRetriever(bm25=bm25_retriever, vector=vector_retriever)
+    bm25_retriever   = BM25Retriever.from_documents(chunks)
+    bm25_retriever.k = 4
+    retriever        = HybridRetriever(bm25=bm25_retriever, vector=vector_retriever)
     print("Using hybrid search (BM25 + vector).")
 else:
     retriever = vector_retriever
     print("Using vector search.")
 
 
-# ── 7. Prompt + chain ─────────────────────────────────────────────────────────
+# ── 7. Prompts ────────────────────────────────────────────────────────────────
 
-prompt = PromptTemplate.from_template("""
-Answer the question using only the context below.
-If the answer isn't in the context, say "I don't know."
+llm = OllamaLLM(model="llama3.2")
+
+answer_prompt = PromptTemplate.from_template("""
+You are a helpful assistant. Answer the question using only the context below.
+If the answer isn't explicitly stated but can be reasonably inferred, answer it.
+If there is truly no relevant information, say "I don't know."
 
 Context: {context}
 
 Question: {question}
 """)
 
-llm = OllamaLLM(model="llama3.2")
+rewrite_prompt = PromptTemplate.from_template("""
+You are a search query optimizer. Rewrite the user's question into 3 different
+search queries that would help find relevant information in a document.
+Return only the 3 queries, one per line, no numbering or extra text.
 
-def format_docs(docs):
+Question: {question}
+""")
+
+rewrite_chain = rewrite_prompt | llm | StrOutputParser()
+
+
+# ── 8. Query rewriting + retrieval ───────────────────────────────────────────
+
+def format_docs(docs: List[Document]) -> str:
     return "\n\n".join(doc.page_content for doc in docs)
 
-chain = (
-    {"context": retriever | format_docs, "question": RunnablePassthrough()}
-    | prompt
-    | llm
-    | StrOutputParser()
-)
+def get_docs(question: str) -> List[Document]:
+    rewritten = rewrite_chain.invoke({"question": question})
+    queries   = [question] + [q.strip() for q in rewritten.strip().split("\n") if q.strip()]
+    seen, all_docs = set(), []
+    for q in queries:
+        for doc in retriever.invoke(q):
+            if doc.page_content not in seen:
+                seen.add(doc.page_content)
+                all_docs.append(doc)
+    return all_docs[:8]
+
+answer_chain = answer_prompt | llm | StrOutputParser()
 
 
-# ── 8. Q&A loop ───────────────────────────────────────────────────────────────
+# ── 9. Q&A loop ───────────────────────────────────────────────────────────────
 
-print("\nReady! Ask anything about your document(s).")
+print("\nReady! Ask anything about your documents.")
 print("Type 'quit' to exit.\n")
 
 while True:
@@ -209,5 +219,7 @@ while True:
         break
     if not question.strip():
         continue
-    answer = chain.invoke(question)
+    docs    = get_docs(question)
+    context = format_docs(docs)
+    answer  = answer_chain.invoke({"context": context, "question": question})
     print(f"\nAnswer: {answer}\n")
