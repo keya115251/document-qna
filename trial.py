@@ -234,7 +234,7 @@ answer_chain  = answer_prompt  | llm      | StrOutputParser()
 summary_chain = summary_prompt | llm      | StrOutputParser()
 
 
-# ── 10. Auto summary ──────────────────────────────────────────────────────────
+# ── 10. Auto summary ─────────────────────────────────────────────────────────
 
 def summarize_docs(docs: List[Document]) -> None:
     sample  = "\n\n".join(doc.page_content for doc in docs[:3])[:3000]
@@ -244,7 +244,30 @@ def summarize_docs(docs: List[Document]) -> None:
     print("-" * 60)
 
 
-# ── 11. Format helpers ────────────────────────────────────────────────────────
+# ── 11. Chat history export ───────────────────────────────────────────────────
+
+def export_history(history: list) -> None:
+    if not history:
+        print("No conversation to export.\n")
+        return
+    from datetime import datetime
+    filename = f"chat_export_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt"
+    with open(filename, "w", encoding="utf-8") as f:
+        f.write("=== Document Q&A — Chat Export ===\n")
+        f.write(f"Exported: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write("=" * 60 + "\n\n")
+        for i, turn in enumerate(history, 1):
+            f.write(f"Q{i}: {turn['question']}\n\n")
+            f.write(f"A{i}: {turn['answer']}\n\n")
+            if turn.get("citations"):
+                f.write("Sources:\n")
+                for c in turn["citations"]:
+                    f.write(f"  • {c}\n")
+            f.write("-" * 60 + "\n\n")
+    print(f"✅ Chat exported to {filename}\n")
+
+
+# ── 12. Format helpers ────────────────────────────────────────────────────────
 
 def format_history(history: list) -> str:
     if not history:
@@ -282,17 +305,20 @@ def get_docs(question: str, history: list) -> List[Document]:
     return all_docs[:8]
 
 
-# ── 12. Run auto summary after loading ───────────────────────────────────────
+# ── 13. Run auto summary after loading ───────────────────────────────────────
 
 if db_choice != "1":
     summarize_docs(docs)
 
 
-# ── 13. Q&A loop ──────────────────────────────────────────────────────────────
+# ── 14. Q&A loop ─────────────────────────────────────────────────────────────
 
 print("\nReady! Ask anything about your documents.")
-print("Commands: 'quit' to exit, 'clear' to reset memory,")
-print("          'load url <url>' to add a webpage mid-session\n")
+print("Commands:")
+print("  'quit'              → exit")
+print("  'export'            → save chat history to a file")
+print("  'clear'             → reset conversation memory")
+print("  'load url <url>'    → add a webpage mid-session\n")
 
 history = []
 
@@ -301,8 +327,14 @@ while True:
 
     if not question:
         continue
+
     if question.lower() == "quit":
         break
+
+    if question.lower() == "export":
+        export_history(history)
+        continue
+
     if question.lower() == "clear":
         history = []
         print("Conversation history cleared.\n")
@@ -318,8 +350,8 @@ while True:
             new_chunks = splitter.split_documents(new_docs)
             vectorstore.add_documents(new_chunks)
             all_chunks.extend(new_chunks)
-            bm25_retriever         = BM25Retriever.from_documents(all_chunks)
-            bm25_retriever.k       = 4
+            bm25_retriever             = BM25Retriever.from_documents(all_chunks)
+            bm25_retriever.k           = 4
             retriever.__dict__['bm25'] = bm25_retriever
             print(f"Added {len(new_chunks)} chunks from {url}")
             summarize_docs(new_docs)
@@ -342,4 +374,4 @@ while True:
         print(f"  • {c}")
     print()
 
-    history.append({"question": question, "answer": answer})
+    history.append({"question": question, "answer": answer, "citations": citations})
