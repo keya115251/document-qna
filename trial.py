@@ -15,11 +15,10 @@ from langchain_community.retrievers import BM25Retriever
 from langchain_core.retrievers import BaseRetriever
 from langchain_core.documents import Document
 from langchain_core.prompts import PromptTemplate
-from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from pydantic import Field
 
-# ── CONFIG — update these paths if yours differ ───────────────────────────────
+# ── CONFIG ────────────────────────────────────────────────────────────────────
 TESSERACT_PATH = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 POPPLER_PATH   = r"C:\poppler\poppler-26.02.0\Library\bin"
 CHROMA_DIR     = "./chroma_db"
@@ -164,19 +163,22 @@ else:
     print("Using vector search.")
 
 
-# ── 7. Prompts ────────────────────────────────────────────────────────────────
+# ── 7. Prompts + LLM ─────────────────────────────────────────────────────────
 
 llm = OllamaLLM(model="llama3.2")
 
 answer_prompt = PromptTemplate.from_template("""
 You are a helpful assistant. Answer the question using only the context below.
+Each context chunk is labeled with [SOURCE: filename, PAGE: number].
 If the answer isn't explicitly stated but can be reasonably inferred, answer it.
 If there is truly no relevant information, say "I don't know."
 
-Context: {context}
+Context:
+{context}
 
 Question: {question}
-""")
+
+Answer:""")
 
 rewrite_prompt = PromptTemplate.from_template("""
 You are a search query optimizer. Rewrite the user's question into 3 different
@@ -186,13 +188,31 @@ Return only the 3 queries, one per line, no numbering or extra text.
 Question: {question}
 """)
 
-rewrite_chain = rewrite_prompt | llm | StrOutputParser()
+rewrite_chain  = rewrite_prompt | llm | StrOutputParser()
+answer_chain   = answer_prompt  | llm | StrOutputParser()
 
 
-# ── 8. Query rewriting + retrieval ───────────────────────────────────────────
+# ── 8. Format docs with citations ────────────────────────────────────────────
 
-def format_docs(docs: List[Document]) -> str:
-    return "\n\n".join(doc.page_content for doc in docs)
+def format_docs_with_citations(docs: List[Document]) -> tuple[str, list]:
+    context_parts = []
+    citations     = []
+
+    for i, doc in enumerate(docs):
+        source   = Path(doc.metadata.get("source", "unknown")).name
+        page     = doc.metadata.get("page", "?")
+        label    = f"[SOURCE: {source}, PAGE: {page}]"
+        context_parts.append(f"{label}\n{doc.page_content}")
+
+        # Collect unique citations
+        citation = f"{source} — p.{page}"
+        if citation not in citations:
+            citations.append(citation)
+
+    return "\n\n".join(context_parts), citations
+
+
+# ── 9. Query rewriting + retrieval ───────────────────────────────────────────
 
 def get_docs(question: str) -> List[Document]:
     rewritten = rewrite_chain.invoke({"question": question})
@@ -205,10 +225,8 @@ def get_docs(question: str) -> List[Document]:
                 all_docs.append(doc)
     return all_docs[:8]
 
-answer_chain = answer_prompt | llm | StrOutputParser()
 
-
-# ── 9. Q&A loop ───────────────────────────────────────────────────────────────
+# ── 10. Q&A loop ──────────────────────────────────────────────────────────────
 
 print("\nReady! Ask anything about your documents.")
 print("Type 'quit' to exit.\n")
@@ -219,7 +237,13 @@ while True:
         break
     if not question.strip():
         continue
-    docs    = get_docs(question)
-    context = format_docs(docs)
-    answer  = answer_chain.invoke({"context": context, "question": question})
-    print(f"\nAnswer: {answer}\n")
+
+    docs              = get_docs(question)
+    context, citations = format_docs_with_citations(docs)
+    answer            = answer_chain.invoke({"context": context, "question": question})
+
+    print(f"\nAnswer: {answer}")
+    print("\nSources:")
+    for c in citations:
+        print(f"  • {c}")
+    print()
