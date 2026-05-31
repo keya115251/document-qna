@@ -166,57 +166,67 @@ else:
 # ── 7. Prompts + LLM ─────────────────────────────────────────────────────────
 
 llm = OllamaLLM(model="llama3.2")
+fast_llm = OllamaLLM(model="llama3.2:1b")
 
 answer_prompt = PromptTemplate.from_template("""
-You are a helpful assistant. Answer the question using only the context below.
-Each context chunk is labeled with [SOURCE: filename, PAGE: number].
+You are a helpful assistant with memory of the conversation so far.
+Answer the question using the context below and the conversation history.
 If the answer isn't explicitly stated but can be reasonably inferred, answer it.
 If there is truly no relevant information, say "I don't know."
 
-Context:
+Conversation history:
+{history}
+
+Context from documents:
 {context}
 
 Question: {question}
 
 Answer:""")
 
-rewrite_prompt = PromptTemplate.from_template("""
-You are a search query optimizer. Rewrite the user's question into 3 different
-search queries that would help find relevant information in a document.
-Return only the 3 queries, one per line, no numbering or extra text.
+rewrite_prompt = PromptTemplate.from_template("""Rewrite this question as a better search query. Return only the query, nothing else.
 
 Question: {question}
-""")
+History summary: {history}""")
 
-rewrite_chain  = rewrite_prompt | llm | StrOutputParser()
-answer_chain   = answer_prompt  | llm | StrOutputParser()
+rewrite_chain = rewrite_prompt | fast_llm | StrOutputParser()
+answer_chain  = answer_prompt  | llm | StrOutputParser()
 
 
-# ── 8. Format docs with citations ────────────────────────────────────────────
+# ── 8. Format helpers ─────────────────────────────────────────────────────────
+
+def format_history(history: list) -> str:
+    if not history:
+        return "No previous conversation."
+    lines = []
+    for turn in history[-4:]:  # last 4 exchanges to keep context window manageable
+        lines.append(f"User: {turn['question']}")
+        lines.append(f"Assistant: {turn['answer']}")
+    return "\n".join(lines)
 
 def format_docs_with_citations(docs: List[Document]) -> tuple[str, list]:
-    context_parts = []
-    citations     = []
-
-    for i, doc in enumerate(docs):
+    context_parts, citations = [], []
+    for doc in docs:
         source   = Path(doc.metadata.get("source", "unknown")).name
         page     = doc.metadata.get("page", "?")
         label    = f"[SOURCE: {source}, PAGE: {page}]"
         context_parts.append(f"{label}\n{doc.page_content}")
-
-        # Collect unique citations
         citation = f"{source} — p.{page}"
         if citation not in citations:
             citations.append(citation)
-
     return "\n\n".join(context_parts), citations
 
-
-# ── 9. Query rewriting + retrieval ───────────────────────────────────────────
-
-def get_docs(question: str) -> List[Document]:
-    rewritten = rewrite_chain.invoke({"question": question})
-    queries   = [question] + [q.strip() for q in rewritten.strip().split("\n") if q.strip()]
+def get_docs(question: str, history: list) -> List[Document]:
+    # Summarize history to just last exchange for rewriting
+    last = f"Previous topic: {history[-1]['question']}" if history else "None"
+    
+    rewritten = rewrite_chain.invoke({
+        "question": question,
+        "history": last
+    })
+    query = rewritten.strip().split("\n")[0]  # take just first line
+    queries = [question, query] if query != question else [question]
+    
     seen, all_docs = set(), []
     for q in queries:
         for doc in retriever.invoke(q):
@@ -226,24 +236,38 @@ def get_docs(question: str) -> List[Document]:
     return all_docs[:8]
 
 
-# ── 10. Q&A loop ──────────────────────────────────────────────────────────────
+# ── 9. Q&A loop with memory ───────────────────────────────────────────────────
 
 print("\nReady! Ask anything about your documents.")
-print("Type 'quit' to exit.\n")
+print("Type 'quit' to exit, 'clear' to reset conversation history.\n")
+
+history = []
 
 while True:
     question = input("You: ")
+
     if question.strip().lower() == "quit":
         break
+    if question.strip().lower() == "clear":
+        history = []
+        print("Conversation history cleared.\n")
+        continue
     if not question.strip():
         continue
 
-    docs              = get_docs(question)
+    docs               = get_docs(question, history)
     context, citations = format_docs_with_citations(docs)
-    answer            = answer_chain.invoke({"context": context, "question": question})
+    answer             = answer_chain.invoke({
+        "context":  context,
+        "question": question,
+        "history":  format_history(history)
+    })
 
     print(f"\nAnswer: {answer}")
     print("\nSources:")
     for c in citations:
         print(f"  • {c}")
     print()
+
+    # Save to memory
+    history.append({"question": question, "answer": answer})
