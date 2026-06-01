@@ -25,10 +25,16 @@ No API keys. No cloud dependency. No cost.
 
 ## Preview
 
-![Landing page](assets/preview_landing.png)
-![Chat with citations](assets/preview_chat.png)
-![Eval dashboard](assets/preview_eval1.png)
-![Per Query Breakdown](assets/preview_eval2.png)
+<table>
+  <tr>
+    <td><img src="assets/preview_landing.png" width="500"/></td>
+    <td><img src="assets/preview_chat.png" width="500"/></td>
+  </tr>
+  <tr>
+    <td><img src="assets/preview_eval1.png" width="500"/></td>
+    <td><img src="assets/preview_eval2.png" width="500"/></td>
+  </tr>
+</table>
 
 ---
 
