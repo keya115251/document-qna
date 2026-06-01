@@ -75,7 +75,7 @@ At startup, choose to load a single file, folder, or URL. During a session:
 - [x] Citations with source and page attribution
 - [x] Conversation memory
 - [x] URL support with mid-session loading
-- [ ] Auto document summary on load
-- [ ] Chat history export
-- [ ] Web UI (Streamlit)
+- [x] Auto document summary on load
+- [x] Chat history export
+- [x] Web UI (Streamlit)
 - [ ] Evaluation dashboard
